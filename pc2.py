@@ -7,6 +7,8 @@ from sklearn import neighbors
 import pylab
 from matplotlib.colors import ListedColormap
 from scipy.ndimage import measurements
+from shapely import ops
+import networkx
 
 def cache():
     r = csv.reader(open('all.csv'))
@@ -78,21 +80,41 @@ def main2():
         '\x01\x00\x01\x00': [(0.5, 0.0), (0.5, 1.0)],
         '\x01\x00\x01\x01': [(0.0, 0.5), (0.5, 1.0)],
         '\x01\x01\x00\x00': [(0.0, 0.5), (1.0, 0.5)],
-        '\x01\x01\x00\x01': [(0.5, 0.0), (1.0, 0.5)],
-        '\x01\x01\x01\x00': [(0.5, 1.0), (1.0, 0.5)]
+        '\x01\x01\x00\x01': [(0.0, 0.5), (0.5, 1.0)],
+        '\x01\x01\x01\x00': [(0.5, 1.0), (1.0, 0.5)],
         '\x01\x01\x01\x01': [],
     }
-    
-    segments = []
+
     zo = (zo == 1).astype('u1')
+    g = networkx.Graph()
+
+    k = 0
     for i in xrange(zo.shape[0]-1):
         for j in xrange(zo.shape[1]-1):
-            x0, y0, x1, y1 = LOOKUP[zo[i:i+2,j:j+2].tostring()]
-            # xx[i] + stepsize * x0  etc
-            #segments.append(p_index_1, p_index_2)
+            ps = iter(LOOKUP[zo[i:i+2,j:j+2].tostring()])
+            x0 = xx[i, j]
+            y0 = yy[i, j]
+            for a, b in zip(ps, ps):
+                ap = int(x0 + STEP * a[0]), int(y0 + STEP * a[1])
+                bp = int(x0 + STEP * b[0]), int(y0 + STEP * b[1])
+
+                print repr(zo[i:i+2,j:j+2].tostring()), a, b
+                print x0, y0, ap, bp
+
+                g.add_node(ap)
+                g.add_node(bp)
+                g.add_edge(ap, bp)
+                k += 1
+                #segments.append((x0 + STEP * a[0], y0 + STEP * a[1]))
+                #segments.append((x0 + STEP * b[0], y0 + STEP * b[1]))
+
+    
+    # partition
+    print k
+    from IPython.Shell import IPShellEmbed;ipshell = IPShellEmbed([]);ipshell()
 
     #pylab.pcolormesh(xx, yy, zo, cmap=cmap)
-    #pylab.scatter(n4[:,0], n4[:,1], c='#ffaa00')
+    #pylab.plot(segments[:,0], segments[:,1], '-')
     #pylab.show()
 
             
