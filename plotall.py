@@ -19,8 +19,8 @@ def gencolor():
 for path in glob.glob('out/*.npy'):
     d = np.load(path)
     c = gencolor()
-    pylab.plot(d[:,0], d[:,1], color=c)
+    pylab.fill(d[:,0], d[:,1], color=c)
     x, y = d.mean(0)
-    pylab.text(x, y, path[-8:-4], color=c)
+    pylab.text(x, y, path[-8:-4], color='#000000')
 
 pylab.show()
