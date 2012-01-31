@@ -10,6 +10,7 @@ import numpy as np
 from sklearn import neighbors
 import networkx
 import shapely.ops
+import shapely.geometry
 
 # See http://en.wikipedia.org/wiki/Marching_squares for the general
 # idea. This is a "lazy" marching squares implementation though.
@@ -51,13 +52,18 @@ def get_labeled_data_from_csv(infile):
 
 #import profilehooks
 #@profilehooks.profile
-def get_boundaries(data, classifier, step, num_label):
+def get_boundary_for_label(data, classifier, num_label, step):
+    t_start = time.time()
     # 1) Initialisation: find a boundary
     i, j = 0, 0
     district = data[data[:,0] == num_label, 1:]
 
     # xx align cooreds
     x0, y0 = district.mean(0).astype('u8')
+
+    # [63215  8195] [ 655448 1213660]
+    xs, ys = data[:,1:].min(0)
+    xe, ye = data[:,1:].max(0)
 
     while True:
         x, y = x0 + step * i, y0 + step * j
@@ -66,19 +72,22 @@ def get_boundaries(data, classifier, step, num_label):
         )
         if len(set(prediction)) > 1:
             break
+        if x < xs or x > xe or y < ys or y > ye:
+            return []
         i += 1
 
     work = set([(i, j)])
-    seen = work.copy()
-
-    # [63215  8195] [ 655448 1213660]
-    xs, ys = data[:,1:].min(0)
-    xe, ye = data[:,1:].max(0)
+    initial = (i, j)
+    seen = set()
 
     minx, maxx, miny, maxy = x0, x0, y0, y0
+    outline = networkx.Graph()
     while work:
         i, j = work.pop()
-        seen.add((i, j))
+        # Make sure we add the final edge in the loop.
+        if (i, j) != initial:
+            seen.add((i, j))
+
         x, y = x0 + step * i, y0 + step * j
         if x < xs or x > xe or y < ys or y > ye:
             continue
@@ -98,11 +107,36 @@ def get_boundaries(data, classifier, step, num_label):
             if new not in seen:
                 work.add(new)
 
-    s = np.array(list(seen))
-    print s.min(0), s.max(0), s.shape
-    pylab.plot(s[:,0], s[:,1], 'b.')
-    pylab.show()
-    from IPython.Shell import IPShellEmbed;ipshell = IPShellEmbed([]);ipshell()
+        piter = iter(MARCHING_SQUARE_LOOKUP[lookup])
+        for rel1, rel2 in zip(piter, piter):
+            p1 = x + rel1[0] * step / 2 , y + rel1[1] * step / 2
+            p2 = x + rel2[0] * step / 2 , y + rel2[1] * step / 2
+            outline.add_node(p1)
+            outline.add_node(p2)
+            outline.add_edge(p1, p2)
+
+    # Pick the largest subgraph, other graphs are most likely outliers.
+    logging.info(
+        "%s: Found %s connected graphs in %.2fs",
+        num_label,
+        len(networkx.connected_component_subgraphs(outline)),
+        time.time() - t_start,
+    )
+    largest = max(
+        networkx.connected_component_subgraphs(outline),
+        key=lambda x: x.size()
+    )
+    return list(shapely.ops.polygonize(largest.edges()))[0]
+
+def one_boundary(data, classifier, num_label, text_label, step):
+    logging.debug("Preparing %s, %s", text_label, num_label)
+    try:
+        poly = get_boundary_for_label(data, classifier, num_label, step)
+        x, y = poly.boundary.xy
+        coords = np.vstack([x, y]).transpose()
+        np.save('out/{}.npy'.format(text_label), coords)
+    except Exception:
+        logging.exception('ignoring.')
 
 def main():
     #data, label_map = get_labeled_data_from_csv(open('all.csv'))
@@ -116,7 +150,8 @@ def main():
     classifier = neighbors.KNeighborsClassifier(5, algorithm='kd_tree')
     classifier.fit(data[:,1:], data[:,0])
 
-    get_boundaries(data, classifier, step, label_map['N4'])
+    for text_label, num_label in label_map.items():
+        one_boundary(data, classifier, num_label, text_label, step)
 
 if __name__ == '__main__':
     logging.basicConfig(level=10)
