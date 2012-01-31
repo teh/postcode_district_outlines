@@ -1,3 +1,4 @@
+import glob
 import time
 import logging
 import itertools
@@ -11,6 +12,8 @@ from sklearn import neighbors
 import networkx
 import shapely.ops
 import shapely.geometry
+
+import shapefile
 
 # See http://en.wikipedia.org/wiki/Marching_squares for the general
 # idea. This is a "lazy" marching squares implementation though.
@@ -52,18 +55,14 @@ def get_labeled_data_from_csv(infile):
 
 #import profilehooks
 #@profilehooks.profile
-def get_boundary_for_label(data, classifier, num_label, step):
+def get_boundary_for_label(data, classifier, coastline, num_label, step):
     t_start = time.time()
     # 1) Initialisation: find a boundary
     i, j = 0, 0
     district = data[data[:,0] == num_label, 1:]
 
-    # xx align cooreds
-    x0, y0 = district.mean(0).astype('u8')
-
-    # [63215  8195] [ 655448 1213660]
-    xs, ys = data[:,1:].min(0)
-    xe, ye = data[:,1:].max(0)
+    # Make sure everything is on the same grid of size step.
+    x0, y0 = np.floor(district.mean(0) / step) * step
 
     while True:
         x, y = x0 + step * i, y0 + step * j
@@ -72,26 +71,21 @@ def get_boundary_for_label(data, classifier, num_label, step):
         )
         if len(set(prediction)) > 1:
             break
-        if x < xs or x > xe or y < ys or y > ye:
+        if not coastline.contains(shapely.geometry.Point(x, y)):
             return []
-        i += 1
+        i -= 1
 
     work = set([(i, j)])
     initial = (i, j)
     seen = set()
 
-    minx, maxx, miny, maxy = x0, x0, y0, y0
     outline = networkx.Graph()
+
     while work:
         i, j = work.pop()
-        # Make sure we add the final edge in the loop.
-        if (i, j) != initial:
-            seen.add((i, j))
+        seen.add((i, j))
 
         x, y = x0 + step * i, y0 + step * j
-        if x < xs or x > xe or y < ys or y > ye:
-            continue
-
         prediction = classifier.predict(
             np.array([[x, y], [x+step, y], [x, y+step], [x+step,y+step]])
         )
@@ -126,12 +120,23 @@ def get_boundary_for_label(data, classifier, num_label, step):
         networkx.connected_component_subgraphs(outline),
         key=lambda x: x.size()
     )
+    """
+    d = np.array(largest.nodes())
+    c = collections.Counter(sum([[a,b] for a, b in largest.edges()], []))
+    print [(x, y) for x, y in c.items() if y != 2]
+
+    for a, b in outline.edges():
+        pylab.plot([a[0], b[0]], [a[1], b[1]], 'b-')
+        pylab.plot([a[0], b[0]], [a[1], b[1]], 'ro')
+    #pylab.show()
+    """
+
     return list(shapely.ops.polygonize(largest.edges()))[0]
 
-def one_boundary(data, classifier, num_label, text_label, step):
+def one_boundary(data, classifier, coastline, num_label, text_label, step):
     logging.debug("Preparing %s, %s", text_label, num_label)
     try:
-        poly = get_boundary_for_label(data, classifier, num_label, step)
+        poly = get_boundary_for_label(data, classifier, coastline, num_label, step)
         x, y = poly.boundary.xy
         coords = np.vstack([x, y]).transpose()
         np.save('out/{}.npy'.format(text_label), coords)
@@ -150,8 +155,24 @@ def main():
     classifier = neighbors.KNeighborsClassifier(5, algorithm='kd_tree')
     classifier.fit(data[:,1:], data[:,0])
 
+    # load coastline
+    shape_reader = shapefile.Reader('/home/tom/data/ordnance_survey/strategi/data/coastline')
+
+    coastline_index = [2400, 2403, 2404, 2405, 2408, 2399, 2406, 2407, 2402, 2401]
+    coastline = np.array(sum(
+        [x.points for i, x in enumerate(shape_reader.shapes()) if i in coastline_index], []
+    ))
+    coastline = shapely.geometry.Polygon(coastline)
+    assert coastline.is_valid
+
+    return one_boundary(data, classifier, coastline, label_map['AB23'], 'AB23', step)
+
+    done = set(x.split('/')[1].split('.')[0] for x in glob.glob('out/*npy'))
     for text_label, num_label in label_map.items():
-        one_boundary(data, classifier, num_label, text_label, step)
+        if text_label in done:
+            print "SKIP", text_label
+            continue
+        one_boundary(data, classifier, coastline, num_label, text_label, step)
 
 if __name__ == '__main__':
     logging.basicConfig(level=10)
