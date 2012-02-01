@@ -11,6 +11,8 @@ To generate pretty heat-maps you need to colour areas instead of points though.
 
 This project aims to generate a closed outline for each postal district.
 
+The ideal outlines would cover all of the land. That implies that two adjacent postcode outlines share boundary points where appropriate.
+
 # How it is done in theory
 
 1. Create a grid
