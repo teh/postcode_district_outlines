@@ -13,7 +13,7 @@ import networkx
 import shapely.ops
 import shapely.geometry
 
-import shapefile
+from common import get_coastline
 
 # See http://en.wikipedia.org/wiki/Marching_squares for the general
 # idea. This is a "lazy" marching squares implementation though.
@@ -61,6 +61,11 @@ def get_boundary_for_label(data, classifier, coastline, num_label, step):
     i, j = 0, 0
     district = data[data[:,0] == num_label, 1:]
 
+    # boundary box
+    xs, ys = district.min(0)
+    xe, ye = district.max(0)
+    w, h = xe - xs, ye - ys
+
     # Make sure everything is on the same grid of size step.
     x0, y0 = np.floor(district.mean(0) / step) * step
 
@@ -71,9 +76,10 @@ def get_boundary_for_label(data, classifier, coastline, num_label, step):
         )
         if len(set(prediction)) > 1:
             break
-        if not coastline.contains(shapely.geometry.Point(x, y)):
-            return []
-        i -= 1
+        # restrict to 2 times boundary box
+        if x < xs - w or x > xe + w or y < ys - h or y > ye + h:
+            break
+        i += 1
 
     work = set([(i, j)])
     initial = (i, j)
@@ -86,10 +92,21 @@ def get_boundary_for_label(data, classifier, coastline, num_label, step):
         seen.add((i, j))
 
         x, y = x0 + step * i, y0 + step * j
+
         prediction = classifier.predict(
             np.array([[x, y], [x+step, y], [x, y+step], [x+step,y+step]])
         )
-        #print "P", prediction
+
+        # artificial wall-in (for coasts)
+        if x < xs - w:
+            prediction[0] = prediction[2] = 0
+        if x > xe + w:
+            prediction[1] = prediction[3] = 0
+        if y < ys - h:
+            prediction[0] = prediction[1] = 0
+        if y > ye + h:
+            prediction[2] = prediction[3] = 0
+
         if num_label not in set(prediction):
             continue
         
@@ -128,15 +145,21 @@ def get_boundary_for_label(data, classifier, coastline, num_label, step):
     for a, b in outline.edges():
         pylab.plot([a[0], b[0]], [a[1], b[1]], 'b-')
         pylab.plot([a[0], b[0]], [a[1], b[1]], 'ro')
-    #pylab.show()
+    pylab.show()
     """
-
     return list(shapely.ops.polygonize(largest.edges()))[0]
 
 def one_boundary(data, classifier, coastline, num_label, text_label, step):
     logging.debug("Preparing %s, %s", text_label, num_label)
     try:
         poly = get_boundary_for_label(data, classifier, coastline, num_label, step)
+        poly = shapely.geometry.polygon.orient(poly)
+        clipped = coastline.intersection(poly)
+        if isinstance(clipped, shapely.geometry.MultiPolygon):
+            poly = sorted(clipped, key=lambda x: x.area)[-1]
+        else:
+            poly = clipped
+
         x, y = poly.boundary.xy
         coords = np.vstack([x, y]).transpose()
         np.save('out/{}.npy'.format(text_label), coords)
@@ -154,18 +177,10 @@ def main():
 
     classifier = neighbors.KNeighborsClassifier(5, algorithm='kd_tree')
     classifier.fit(data[:,1:], data[:,0])
+    coastline = get_coastline()
 
-    # load coastline
-    shape_reader = shapefile.Reader('/home/tom/data/ordnance_survey/strategi/data/coastline')
-
-    coastline_index = [2400, 2403, 2404, 2405, 2408, 2399, 2406, 2407, 2402, 2401]
-    coastline = np.array(sum(
-        [x.points for i, x in enumerate(shape_reader.shapes()) if i in coastline_index], []
-    ))
-    coastline = shapely.geometry.Polygon(coastline)
-    assert coastline.is_valid
-
-    return one_boundary(data, classifier, coastline, label_map['AB23'], 'AB23', step)
+    #o = 'BN16'
+    #return one_boundary(data, classifier, coastline, label_map[o], o, step)
 
     done = set(x.split('/')[1].split('.')[0] for x in glob.glob('out/*npy'))
     for text_label, num_label in label_map.items():
